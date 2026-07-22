@@ -1,0 +1,54 @@
+name: Cleanup Workflow Runs
+
+on:
+  schedule:
+    # 매주 일요일 UTC 20:00 == 월요일 KST 05:00 (wakeup 실행 전에 정리)
+    - cron: '0 20 * * 0'
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: '남길 실행 기록 개수'
+        required: false
+        default: '5'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old runs (keep latest N)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          KEEP: ${{ github.event.inputs.keep || '5' }}
+        run: |
+          set -euo pipefail
+
+          echo "저장소=$REPO / 워크플로별 보관 개수=$KEEP"
+
+          # 워크플로 파일별로 따로 정리한다 (각각 최신 KEEP개만 남김)
+          gh api --paginate "repos/${REPO}/actions/workflows" \
+            --jq '.workflows[] | select(.state == "active") | "\(.id)\t\(.name)"' \
+          | while IFS=$'\t' read -r WF_ID WF_NAME; do
+              echo "::group::${WF_NAME} (id=${WF_ID})"
+
+              # API 는 최신순으로 반환. 진행 중인 실행은 삭제 불가하므로 completed 만 대상.
+              gh api --paginate \
+                "repos/${REPO}/actions/workflows/${WF_ID}/runs?status=completed&per_page=100" \
+                --jq '.workflow_runs[] | "\(.id)\t\(.run_number)"' > runs.txt || true
+
+              TOTAL=$(wc -l < runs.txt | tr -d ' ')
+              echo "completed 실행 수: ${TOTAL}"
+
+              tail -n "+$((KEEP + 1))" runs.txt | while IFS=$'\t' read -r RUN_ID RUN_NUM; do
+                echo "삭제: run #${RUN_NUM} (id=${RUN_ID})"
+                gh api -X DELETE "repos/${REPO}/actions/runs/${RUN_ID}" --silent < /dev/null \
+                  || echo "  삭제 실패 (건너뜀): ${RUN_ID}"
+              done
+
+              rm -f runs.txt
+              echo "::endgroup::"
+            done

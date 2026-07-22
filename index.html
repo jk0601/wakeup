@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supabase Wakeup Clock</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --line: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #3ecf8e; /* supabase green */
+    --hand: #e6edf3;
+    --second: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa;
+      --panel: #ffffff;
+      --line: #d8dee4;
+      --text: #1f2328;
+      --muted: #656d76;
+      --hand: #1f2328;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: .01em;
+  }
+  h1 .dot {
+    display: inline-block;
+    width: .55em; height: .55em;
+    margin-right: .5em;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 12px var(--accent);
+  }
+
+  .clock { width: min(78vw, 320px); height: auto; }
+  .face  { fill: var(--panel); stroke: var(--line); stroke-width: 2; }
+  .tick  { stroke: var(--muted); stroke-linecap: round; }
+  .tick.major { stroke: var(--text); }
+  .num   { fill: var(--muted); font-size: 9px; text-anchor: middle; dominant-baseline: central; font-family: inherit; }
+
+  .hand { stroke-linecap: round; transform-origin: 100px 100px; }
+  .hand.hour   { stroke: var(--hand); stroke-width: 5.5; }
+  .hand.minute { stroke: var(--hand); stroke-width: 3.5; }
+  .hand.second { stroke: var(--second); stroke-width: 1.6; }
+  .cap  { fill: var(--second); }
+  .cap-inner { fill: var(--panel); }
+
+  .digital {
+    font-variant-numeric: tabular-nums;
+    font-size: 1.6rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+  }
+  .digital small { color: var(--muted); font-size: .55em; font-weight: 500; margin-left: .5em; }
+
+  .card {
+    width: min(90vw, 380px);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .card .label {
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .card .value { font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card .sub { margin-top: 4px; font-size: .8rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1><span class="dot"></span>Supabase Wakeup</h1>
+
+<svg class="clock" viewBox="0 0 200 200" role="img" aria-label="아날로그 시계">
+  <circle class="face" cx="100" cy="100" r="95"></circle>
+  <g id="ticks"></g>
+  <g id="numerals"></g>
+  <line class="hand hour"   id="hour"   x1="100" y1="100" x2="100" y2="55"></line>
+  <line class="hand minute" id="minute" x1="100" y1="100" x2="100" y2="34"></line>
+  <line class="hand second" id="second" x1="100" y1="110" x2="100" y2="26"></line>
+  <circle class="cap" cx="100" cy="100" r="4"></circle>
+  <circle class="cap-inner" cx="100" cy="100" r="1.6"></circle>
+</svg>
+
+<div class="digital" id="digital">--:--:--<small id="tzlabel">KST</small></div>
+
+<div class="card">
+  <div class="label">마지막 Wakeup</div>
+  <div class="value" id="last">불러오는 중…</div>
+  <div class="sub" id="lastAgo"></div>
+</div>
+
+<script>
+(function () {
+  var TZ = 'Asia/Seoul';
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+
+  // --- 눈금 & 숫자 생성 ---
+  var ticks = document.getElementById('ticks');
+  var numerals = document.getElementById('numerals');
+  for (var i = 0; i < 60; i++) {
+    var major = i % 5 === 0;
+    var a = (i * 6) * Math.PI / 180;
+    var r1 = major ? 78 : 82, r2 = 88;
+    var l = document.createElementNS(SVG_NS, 'line');
+    l.setAttribute('class', 'tick' + (major ? ' major' : ''));
+    l.setAttribute('x1', (100 + r1 * Math.sin(a)).toFixed(2));
+    l.setAttribute('y1', (100 - r1 * Math.cos(a)).toFixed(2));
+    l.setAttribute('x2', (100 + r2 * Math.sin(a)).toFixed(2));
+    l.setAttribute('y2', (100 - r2 * Math.cos(a)).toFixed(2));
+    l.setAttribute('stroke-width', major ? 2.2 : 1);
+    ticks.appendChild(l);
+  }
+  for (var h = 1; h <= 12; h++) {
+    var ah = (h * 30) * Math.PI / 180;
+    var t = document.createElementNS(SVG_NS, 'text');
+    t.setAttribute('class', 'num');
+    t.setAttribute('x', (100 + 66 * Math.sin(ah)).toFixed(2));
+    t.setAttribute('y', (100 - 66 * Math.cos(ah)).toFixed(2));
+    t.textContent = h;
+    numerals.appendChild(t);
+  }
+
+  // --- 지정 타임존의 시/분/초 구하기 ---
+  var partsFmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ, hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+  function tzParts(date) {
+    var o = {};
+    partsFmt.formatToParts(date).forEach(function (p) {
+      if (p.type !== 'literal') o[p.type] = parseInt(p.value, 10);
+    });
+    o.hour = o.hour % 24;
+    return o;
+  }
+
+  var hourEl = document.getElementById('hour');
+  var minEl = document.getElementById('minute');
+  var secEl = document.getElementById('second');
+  var digital = document.getElementById('digital');
+  var tzlabel = document.getElementById('tzlabel');
+
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  function tick() {
+    var now = new Date();
+    var p = tzParts(now);
+    var ms = now.getMilliseconds();
+
+    var sec = p.second + ms / 1000;
+    var min = p.minute + sec / 60;
+    var hr = (p.hour % 12) + min / 60;
+
+    secEl.setAttribute('transform', 'rotate(' + (sec * 6) + ')');
+    minEl.setAttribute('transform', 'rotate(' + (min * 6) + ')');
+    hourEl.setAttribute('transform', 'rotate(' + (hr * 30) + ')');
+
+    digital.firstChild.nodeValue =
+      pad(p.hour) + ':' + pad(p.minute) + ':' + pad(p.second);
+
+    requestAnimationFrame(tick);
+  }
+  digital.textContent = '';
+  digital.insertBefore(document.createTextNode('--:--:--'), null);
+  digital.appendChild(tzlabel);
+  requestAnimationFrame(tick);
+
+  // --- 마지막 wakeup 시각 (워크플로가 커밋하는 JSON) ---
+  var lastEl = document.getElementById('last');
+  var agoEl = document.getElementById('lastAgo');
+  var lastDate = null;
+
+  function renderAgo() {
+    if (!lastDate) return;
+    var diff = Math.max(0, Date.now() - lastDate.getTime());
+    var m = Math.floor(diff / 60000);
+    var text;
+    if (m < 1) text = '방금 전';
+    else if (m < 60) text = m + '분 전';
+    else if (m < 1440) text = Math.floor(m / 60) + '시간 ' + (m % 60) + '분 전';
+    else text = Math.floor(m / 1440) + '일 전';
+    agoEl.textContent = text;
+  }
+
+  fetch('last-wakeup.json?t=' + Date.now(), { cache: 'no-store' })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (d) {
+      lastDate = new Date(d.updated_at);
+      lastEl.textContent = new Intl.DateTimeFormat('ko-KR', {
+        timeZone: TZ, dateStyle: 'medium', timeStyle: 'medium'
+      }).format(lastDate) + ' KST';
+      renderAgo();
+      setInterval(renderAgo, 30000);
+    })
+    .catch(function () {
+      lastEl.textContent = '기록 없음';
+      agoEl.textContent = 'wakeup 워크플로가 아직 실행되지 않았습니다.';
+    });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+name: Supabase Wakeup
+
+on:
+  schedule:
+    # UTC 21:00 == KST 06:00 (다음 날). GitHub cron 은 UTC 기준만 지원합니다.
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+
+# 스케줄 중복 실행 방지
+concurrency:
+  group: supabase-wakeup
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  wakeup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update wakeup row (id = 1)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+
+          NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          echo "now (UTC) = $NOW_UTC"
+
+          HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
+            -X PATCH "${SUPABASE_URL}/rest/v1/wakeup?id=eq.1" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=representation" \
+            -d "{\"created_at\":\"${NOW_UTC}\"}")
+
+          echo "HTTP $HTTP_CODE"
+          cat response.json
+          echo
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Supabase update failed (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+          # 빈 배열이면 id=1 행이 없다는 뜻
+          if [ "$(tr -d '[:space:]' < response.json)" = "[]" ]; then
+            echo "::error::wakeup 테이블에 id=1 행이 없습니다."
+            exit 1
+          fi
+
+          echo "UPDATED_AT=$NOW_UTC" >> "$GITHUB_ENV"
+
+      - name: Write last-wakeup.json
+        run: |
+          set -euo pipefail
+          cat > last-wakeup.json <<EOF
+          {
+            "updated_at": "${UPDATED_AT}",
+            "run_id": "${GITHUB_RUN_ID}",
+            "run_number": ${GITHUB_RUN_NUMBER}
+          }
+          EOF
+          cat last-wakeup.json
+
+      - name: Commit & push
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add last-wakeup.json
+          if git diff --cached --quiet; then
+            echo "변경 없음 — 커밋 생략"
+          else
+            git commit -m "chore: supabase wakeup ${UPDATED_AT}"
+            git push
+          fi
